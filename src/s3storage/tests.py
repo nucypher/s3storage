@@ -19,14 +19,16 @@ from ZODB.tests import (
 class Tests(
     StorageTestBase.StorageTestBase,
     BasicStorage.BasicStorage,
+    MTStorage.MTStorage,
+    RevisionStorage.RevisionStorage,
+    Synchronization.SynchronizedStorage,
 
-    # HistoryStorage.HistoryStorage,
+    # Not currently relevant:
+
+    # PackableStorage.PackableStorageWithOptionalGC,
     # IteratorStorage.ExtendedIteratorStorage,
     # IteratorStorage.IteratorStorage,
-    # MTStorage.MTStorage,
-    # PackableStorage.PackableStorageWithOptionalGC,
-    # RevisionStorage.RevisionStorage,
-    # Synchronization.SynchronizedStorage,
+    # HistoryStorage.HistoryStorage,
     ):
 
     def setUp(self):

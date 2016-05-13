@@ -226,14 +226,18 @@ class S3Storage(object):
     @s3method
     def loadBefore(self, bucket, oid, tid):
         prefix = self._data_prefix + invert64(oid) + '/'
-        obrs = list(_id(bucket, prefix))
         itid = invert64(tid)
-        ltid = None
-        for obr in obrs:
+        ltid = obr = None
+        for obr in _it(bucket, prefix):
             otid = obr.key.rsplit('/', 1)[1]
             if otid > itid:
                 break
             ltid = otid
+        else:
+            if ltid is None:
+                raise ZODB.POSException.POSKeyError(oid)
+            return None
+
         tid = uninvert64(otid)
         data = obr.get()['Body'].read()
         end = ltid
@@ -400,8 +404,7 @@ class S3Storage(object):
         try:
             tdata = transaction.__data
         except AttributeError:
-            raise ZODB.POSException.StorageTransactionError(
-                "tpc_abort called with wrong transaction")
+            return
 
         if transaction == self._transaction:
             self._transaction = None
