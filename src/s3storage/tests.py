@@ -39,9 +39,12 @@ class Tests(
             (self.__bucket_name, self.__base_prefix
              ) = self.__bucket_name.split(':')
         else:
-            self.__base_prefix = ''
+            self.__base_prefix = 'TEST'
 
-        self.__prefix = '{}/{}'.format(
+        if self.__base_prefix and not self.__base_prefix.endswith('/'):
+            self.__base_prefix += '/'
+
+        self.__prefix = '{}{}'.format(
             self.__base_prefix, random.randint(0, m64))
         self._storage = S3Storage(self.__bucket_name, self.__prefix)
 
