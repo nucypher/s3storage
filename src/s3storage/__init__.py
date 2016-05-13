@@ -157,7 +157,7 @@ class S3Storage(object):
             self._finish_committing(*committing)
         else:
             # Clean up any left over uncommitted data
-            self._delete_keys(self._keys(self._commit_prefix))
+            self._async(_delete_keys, self._keys(self._commit_prefix))
 
         self._ltid = ltid = ltid.get()
         self._oid = u64(oid.get() or z64)
@@ -180,11 +180,12 @@ class S3Storage(object):
         return self.__name__
 
     @s3method
-    def getSize(self):
-        return sum(o.size for p in _it(bucket. self._prefix))
+    def getSize(self, bucket):
+        return sum(o.size for o in _it(bucket, self._prefix))
 
     def getTid(self, oid):
-        tid = self._getTid(oid).get()
+        with self._finish_lock:
+            tid = self._getTid(oid).get()
         if tid is None:
             raise ZODB.POSException.POSKeyError(oid)
         else:
@@ -198,15 +199,11 @@ class S3Storage(object):
         return False
 
     def lastTransaction(self):
-        return self._ltid
+        return self._ltid or z64
 
-    @s3method
-    def __len__(self, bucket):
-        # screw it. just return 1 if non-empty :)
-        if _first(bucket, self._data_prefix):
-            return 1
-        else:
-            return 0
+    def __len__(self):
+        # Weird, tests expect this to be correct, or always 0. :/
+        return 0
 
     def load(self, oid, version=''):
         with self._finish_lock:
@@ -265,6 +262,14 @@ class S3Storage(object):
         return self.__name__
 
     def tpc_begin(self, transaction, tid=None):
+        try:
+            transaction.__data
+        except AttributeError:
+            pass
+        else:
+            raise ZODB.POSException.StorageTransactionError(
+                "Multiple calls to tpc_begin in transactiuon", transaction)
+
         prefix = '{}{}_{}/'.format(
             self._commit_prefix,
             datetime.datetime.utcnow().isoformat(),
@@ -321,8 +326,11 @@ class S3Storage(object):
                 old_tid = committed[oid].get()
                 if old_tid and old_tid != serial:
                     # XXX conflict resolution
-                    raise ZODB.POSException.ConflictError(
-                        oid=oid, serials=(old_tid, serial))
+                    if oid in tdata.stores:
+                        class_ = ZODB.POSException.ConflictError
+                    else:
+                        class_ = ZODB.POSException.ReadConflictError
+                    raise class_(oid=oid, serials=(old_tid, serial))
 
             if tdata.tid is None:
                 tdata.tid = ZODB.utils.newTid(self._ltid)
@@ -333,7 +341,11 @@ class S3Storage(object):
                 store.get()
 
             self._transaction = transaction
+
+            tid = tdata.tid
+            return [(oid, tid) for oid in tdata.stores]
         except Exception:
+            self._transaction = None
             self._commit_lock.release()
             raise
 
@@ -354,7 +366,9 @@ class S3Storage(object):
             with self._finish_lock:
                 func(tid)
                 self._finish_committing(prefix, tid)
+
             self._transaction = None
+            del transaction.__data
         finally:
             self._commit_lock.release()
 
@@ -397,20 +411,13 @@ class S3Storage(object):
             raise ZODB.POSException.StorageTransactionError(
                 "tpc_abort called with finished transaction")
 
-        self._delete_keys(tdata.prefix)
+        self._async(_delete_keys, tdata.prefix)
+
+        del transaction.__data
 
     _transaction = None
     def tpc_transaction(self):
         return self._transaction
-
-    @s3asyncmethod
-    def _delete_keys(self, bucket, keys):
-        if isinstance(keys, str):
-            keys = [o.key for o in _it(bucket, prefix)]
-        while keys:
-            bucket.delete_objects(
-                Delete=dict(Objects=[dict(Key=key) for key in keys[:999]]))
-            del keys[:999]
 
     @s3method
     def _get_committing(self, bucket):
@@ -460,6 +467,14 @@ def _put(bucket, key, value):
 
 def _delete(bucket, key):
     bucket.Object(key).delete()
+
+def _delete_keys(bucket, keys):
+    if isinstance(keys, str):
+        keys = [o.key for o in _it(bucket, keys)]
+    while keys:
+        bucket.delete_objects(
+            Delete=dict(Objects=[dict(Key=key) for key in keys[:999]]))
+        del keys[:999]
 
 class TransactionData:
 
